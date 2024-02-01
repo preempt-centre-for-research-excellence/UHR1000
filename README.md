@@ -6,13 +6,13 @@ The UHR 1000+ dataset is the largest, longitudinal cohort to date of individuals
 ![GUI design](figures/UHR1000_overview.png)
 
 ## Dictionary
-A full dictionary is provided in *UHR1000_Dictionary_01022024.xlsx*.
+A full dictionary is provided [here](UHR1000_Dictionary_01022024.xlsx).
 
 ## Harmonisation and conversion tables
-Additional information on how data was aggregated and stanadardised across studies is provided in *UHR1000_Information_01022024.docx*.
+Additional information on how data was aggregated and stanadardised across studies is provided [here](UHR1000_Information_01022024.docx).
 
 ## Application Form
-If you are interested in working with the UHR 1000+ dataset, please fill out the form *UHR1000_ApplicationForm_v01.docx* and contact the corresponding author of the publication below.
+If you are interested in working with the UHR 1000+ dataset, please fill out the [application form](UHR1000_ApplicationForm_v01.docx) and contact the corresponding author of the publication below.
 
 ## Temporal validation analysis
 
