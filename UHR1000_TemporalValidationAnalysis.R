@@ -19,7 +19,7 @@ library(gtsummary)
 
 calibration.plot <- function( cox.model, year ){
   
-  cal <- calibrate(cox.model, method = "boot", u= year*12, m=10, B=1000, bw=FALSE)
+  cal <- calibrate(cox.model, method = "boot", u= year*365, m=10, B=1000, bw=FALSE)
   pred <- as.data.frame(1 - cal[,'pred'])
   colnames(pred) <- c('x')
   
@@ -99,12 +99,42 @@ instability.plot <- function(imp.data, cox.formula, risk.orig, year, B ){
   
   return(risk.mape)
 }
+
+val.calibration.slope <- function(cox.model, cox.late, uhr1000.late){
+  # Calculate PI for both models first
+  x.early <- model.matrix(cox.model) %*% coef(cox.model)
+  xavg.early <- sum(coef(cox.model)*cox.model$means) 
+  PI.early <- x.early - xavg.early # centered PI in development dataset (for discrimination later)
+  
+  # Calculate PI in validation set
+  x.val.early <- model.matrix(cox.late) %*% coef(cox.model) # determine Xb in validation data 
+  # by using coefficients of development data 
+  PI.early.val <- x.val.early - xavg.early # center PI by using mean of PI of development data 
+  
+  # Regress out PI from model and calculate calibration slope in validation set
+  uhr1000.late$PI.early.val <- PI.early.val
+  fit.val.early <- cph(Surv(transdays, transtat) ~ PI.early.val,data = uhr1000.late, x=TRUE, y=TRUE, surv = TRUE, time.inc = 2*365)
+  #cat("Calibration slope for model developed with data from 1995 - 2016")
+  return(fit.val.early$coefficients)
+}
+
+validation.plot <- function( cox.model, year, number, uhr1000.late){
+
+  val.outcomes <- val.surv(cox.model, uhr1000.late, Surv(uhr1000.late$transdays, uhr1000.late$transtat), u = year*365)
+  
+  val.data <- data.frame(1 - val.outcomes$actual, 1-val.outcomes$p)
+  colnames(val.data) <- c('x','Value')
+  val.data$Type <- number
+  
+  return(val.data)
+}
 ################################################################################
 #################### Load UHR 1000 tables  ##############################
 ################################################################################
 
-uhr1000 <- read.csv("U:/PostDoc/Research/UHR1000+/UHR1000_MasterFile_V01.csv", header = TRUE, sep=",")
+uhr1000 <- read.csv("path/to/dataset/", header = TRUE, sep=",")
 
+# Calculate follow-up in months
 uhr1000$transmonths <- (as.yearmon(as.character(uhr1000$enddate), format = "%d/%m/%Y") - as.yearmon(as.character(uhr1000$startdate), format = "%d/%m/%Y"))*12
 
 # Extract just Melbourne sample
@@ -115,7 +145,7 @@ uhr1000 <- subset(uhr1000, site == 1)
 ################################################################################
 
 # Convert GAF scores to SOFAS scores
-gaf <- read.csv("U:/PostDoc/Research/UHR1000+/GAF_SOFAS.csv", header = TRUE, sep=",") # Load conversion table
+gaf <- read.csv(paste(dirname(rstudioapi::getSourceEditorContext()$path),"/GAF_SOFAS.csv", sep = ""), header = TRUE, sep=",") # Load conversion table
 names(gaf) <- c("GAF","SOFAS")
 gaf$SOFAS <- round(gaf$SOFAS)
 
@@ -126,7 +156,7 @@ for(index in c(1:nrow(gaf))){
 }
 
 # Convert Hamilton Depression scores to MADRS scores
-hamd <- read.csv("U:/PostDoc/Research/UHR1000+/MADRS_HAMD.csv", header = TRUE, sep=",") #Load conversion table
+hamd <- read.csv(paste(dirname(rstudioapi::getSourceEditorContext()$path),"/MADRS_HAMD.csv", sep = ""), header = TRUE, sep=",") #Load conversion table
 names(hamd) <- c("MADRS","HAMD")
 
 uhr1000$hamdep_madrs <- uhr1000$madrs_tot_0
@@ -155,12 +185,12 @@ uhr1000$uhr_cat <- relevel(uhr1000$uhr_cat, ref = 1)
 uhr1000$nelsonaalen <- nelsonaalen(uhr1000, transdays, transtat)
 
 ################################################################################
-#################### Descriptive table  ##############################
+#################### Tables  ##############################
 ################################################################################
 
-# ---- UHR1000 descriptive table ----
+#### UHR1000 descriptive table ####
 
-table_demog <- uhr1000 %>% 
+table_desc <- uhr1000 %>% 
   select(assessment_age, gender, timeSxService, uhr_group, transtat, group, caarms_DS_sev_0, caarms_PA_sev_0, caarms_UTC_sev_0, caarms_NBI_sev_0, bprs_tot_0, sans_tot_0, gaf_sofas) %>% # keep only columns of interest
   mutate(
     gender = factor(gender, labels = c("Male", "Female")) ,
@@ -169,6 +199,7 @@ table_demog <- uhr1000 %>%
     transtat = factor(transtat, labels = c("Not transitioned", "Transitioned"))
   ) %>% 
   tbl_summary(  
+    by = transtat,
     statistic = list(all_continuous() ~ "{mean} ({sd})",        # stats and format for continuous columns
                      all_categorical() ~ "{n} / {N} ({p}%)"),   # stats and format for categorical columns
     digits = all_continuous() ~ 1,                              # rounding for continuous columns
@@ -197,11 +228,11 @@ table_demog <- uhr1000 %>%
   modify_header(label = "Variable") %>% # update the column header
   bold_labels()
 
-table_demog %>%
+table_desc %>%
   as_flex_table() %>%
-  flextable::save_as_docx(path = "U:/PostDoc/Research/Publications/Own/UHR1000/descriptive_table.docx")
+  flextable::save_as_docx(path = ".../descriptive_table.docx")
 
-##### Demographic table
+#### Demographic table ####
 
 table_demog <- uhr1000 %>% 
   select(assessment_age, gender, timeSxService, group, uhr_group, marital_status, children, education_highest, accom_current, occup_current, Immigrated, Immigrated_parents) %>% # keep only columns of interest
@@ -250,9 +281,9 @@ table_demog <- uhr1000 %>%
 
 table_demog %>%
   as_flex_table() %>%
-  flextable::save_as_docx(path = "U:/PostDoc/Research/Publications/Own/UHR1000/demog_table.docx")
+  flextable::save_as_docx(path = ".../demog_table.docx")
 
-##### UHR table
+#### UHR table ####
 
 table_uhr <- uhr1000 %>% 
   select(transtat, assessment_age, timeSxService, uhr_group) %>% # keep only columns of interest
@@ -278,10 +309,10 @@ table_uhr <- uhr1000 %>%
 
 table_uhr %>%
   as_flex_table() %>%
-  flextable::save_as_docx(path = "U:/PostDoc/Research/Publications/Own/UHR1000/uhr_table.docx")
+  flextable::save_as_docx(path = ".../UHR1000/uhr_table.docx")
 
 
-# ---- Baseline table by study ----
+#### Baseline table by study ####
 
 table_bl <- uhr1000 %>% 
   select(assessment_age, gender, timeSxService, group, uhr_cat, transtat, study, caarms_UTC_sev_0, caarms_NBI_sev_0, caarms_PA_sev_0, caarms_DS_sev_0, bprs_tot_0, bprs_ps_0, sans_tot_0, sans_af_0, sans_al_0, sans_av_0, sans_an_0, sans_at_0, sofas_currscore_0, gafrat_0, gf_social_score_0, gf_role_score_0) %>% # keep only columns of interest
@@ -380,10 +411,13 @@ uhr1000$timeSxService <- log(uhr1000$timeSxService)
 p_missing <- unlist(lapply(uhr1000, function(x) sum(is.na(x))))/nrow(uhr1000)
 sort(p_missing[p_missing > 0], decreasing = TRUE)
 
+# Exclude invdividuals with no follow-up time information
 uhr1000 <- uhr1000[!is.na(uhr1000$transdays),]
 
+# Save dataset prior to imputation
 uhr1000.org <- uhr1000
-# Limit to 2-year probability
+
+# Limit to 2-year probability (right censor all individuals with a follow-up longer than 2 years)
 uhr1000$transtat <- uhr1000$transtat * (uhr1000$transday < 2*365.25)
 uhr1000[uhr1000$transdays > 2*365.25 & !is.na(uhr1000$transdays), 'transdays'] <- 2*365 
 
@@ -393,20 +427,20 @@ uhr1000[uhr1000$transdays > 2*365.25 & !is.na(uhr1000$transdays), 'transdays'] <
 
 #### Multiple Imputation ####
 imp <- mice(uhr1000, maxit=0)
+
 # Extract predictorMatrix and methods of imputation 
 predM <- imp$predictorMatrix
 meth <- imp$method
 
-# Setting values of variables I'd like to leave out to 0 in the predictor matrix
-#predM[, c("gender")] <- 0
+# Setting values of variables to 0 in the predictor matrix that don't need to be imputed
 #predM[, c("assessment_age")] <- 0
 predM[, c("transtat")] <- 0
 predM[, c("transdays")] <- 0
 predM[, c("transmonths")] <- 0
 predM[c("transdays"),] <- 0
 predM[c("transmonths"),] <- 0
-#predM[, c("caarms_PA_sev_0")] <- 0
 predM[, c("group")] <- 0
+
 # Ordered categorical variables 
 poly <- c("uhr_cat")
 
@@ -468,7 +502,7 @@ plot.data$Predictor <- c("CAARMS Disorganized Speech, Severity",
                          "UHR intake group - Trait",
                          "UHR intake group - BLIPS (ref)")
 
-### colors to be used in the plot
+# colors to be used in the plot
 colp <- "#6b58a6"
 coll <- "#a7a9ac"
 
@@ -487,12 +521,12 @@ forest(plot.data$HR, ci.lb=plot.data$lower, ci.ub = plot.data$upper, slab=plot.d
 text(c(-2,2.2), c(14.5, 14.5), pos=4, 
      c("Variable", "Hazard ratio (95% CI)"), font=2)
 
-### redraw the CI lines and points in the chosen color
+# redraw the CI lines and points in the chosen color
 segments(plot.data$lower, k:1, plot.data$upper, k:1, col=colp, lwd=1.5)
 points(plot.data$HR, k:1, pch=18, cex = plot.data$HR*2,  col="white")
 points(plot.data$HR, k:1, cex = plot.data$HR*2, pch=18, col=colp)
 
-### Sensitivity analysis with study sites ####
+#### Sensitivity analysis with study sites ####
 
 models <- with(uhr1000.imp,coxph(Surv(transdays, transtat) ~ caarms_DS_sev_0 + factor(study)))
 summary(pool(models), conf.int = 0.95, exponentiate = TRUE)
@@ -531,12 +565,12 @@ models <- with(uhr1000.imp,coxph(Surv(transdays, transtat) ~ caarms_DS_sev_0 + c
 summary(pool(models), conf.int = 0.95, exponentiate = TRUE)
 
 ################################################################################
-#################### Prediction Model UHR 1000 vs PACE 400######################
+#################### Internal validation ######################
 ################################################################################
 
 # Single imputation 
-#imp.nr <- sample(1:50,1, replace=F) 
-imp.nr = 19
+imp.nr <- sample(1:50,1, replace=F) 
+#imp.nr = 19 # select specific imputation to reproduce results from paper
 uhr1000.single <- subset(data.comp, .imp == imp.nr )
 
 # Preperation for cox model fit
@@ -544,7 +578,7 @@ dd <- datadist(uhr1000.single)
 options(datadist='dd')
 
 #### Create model with 3 CPP ####
-uhr.3 <- cph(Surv(transmonths, transtat) ~ caarms_DS_sev_0 + caarms_UTC_sev_0 + sans_tot_0, data = uhr1000.single, x=TRUE, y=TRUE, surv = TRUE, time.inc = 2*12)
+uhr.3 <- cph(Surv(transdays, transtat) ~ caarms_DS_sev_0 + caarms_UTC_sev_0 + sans_tot_0, data = uhr1000.single, x=TRUE, y=TRUE, surv = TRUE, time.inc = 2*365)
 pred.uhr3 <- survest(uhr.3, uhr1000.single, times = 2*365)
 risk.uhr3 <- 1 - pred.uhr3$surv
 
@@ -558,80 +592,91 @@ val.uhr3
 # Calibration plot
 cal.uhr3 <- calibration.plot(uhr.3, 2)
 cal.uhr3
+
 # Instability plot
-insta.uhr3 <- instability.plot(uhr1000.single, as.formula(Surv(transmonths, transtat) ~ caarms_DS_sev_0 + caarms_UTC_sev_0 + sans_tot_0), risk.uhr3, 2, 1000)
+insta.uhr3 <- instability.plot(uhr1000.single, as.formula(Surv(transdays, transtat) ~ caarms_DS_sev_0 + caarms_UTC_sev_0 + sans_tot_0), risk.uhr3, 2, 1000)
 mean(insta.uhr3)
 
 ################################################################################
 #################### Temporal validation   ##############################
 ################################################################################
-# Single imputation 
-#imp.nr <- sample(1:50,1, replace=F) 
-imp.nr = 19
-uhr1000.single <- subset(data.comp, .imp == imp.nr )
-#uhr1000.early <- subset(uhr1000.single, study < 7 | study == 11 | study == 13 | study == 12 | study == 8  )
-uhr1000.early <- subset(uhr1000.single, study == 5 | study == 6 | study == 11 | study == 13 | study == 12 | study == 8  )
-uhr1000.late <- subset(uhr1000.single, study == 7 | study == 10 | study == 9 )
 
-dd <- datadist(uhr1000.early)
-options(datadist='dd')
+val.early <- vector()
+val.middle <- vector()
+val.all <- vector()
 
-# Calculate original model
-cox.late <- cph(Surv(transmonths, transtat) ~ caarms_DS_sev_0 + caarms_UTC_sev_0 + sans_tot_0 , data = uhr1000.late, x=TRUE, y=TRUE, surv = TRUE, time.inc = 2*12)
+c.early <- vector()
+c.middle <- vector()
+c.all <- vector()
 
-cox.em <- cph(Surv(transmonths, transtat) ~ caarms_DS_sev_0 + caarms_UTC_sev_0 + sans_tot_0 , data = uhr1000.early, x=TRUE, y=TRUE, surv = TRUE, time.inc = 2*12)
+plot.early <- data.frame()
+plot.middle <- data.frame()
+plot.all <- data.frame()
 
-em.outcomes <- val.surv(cox.em, uhr1000.late, Surv(uhr1000.late$transmonths, uhr1000.late$transtat), u = 2*12)
+for(imp.nr in c(1:50)){
+  uhr1000.single <- subset(data.comp, .imp == imp.nr )
+  uhr1000.early <- subset(uhr1000.single, study < 7 )
+  uhr1000.all <- subset(uhr1000.single, study < 7 | study == 11 | study == 13 | study == 12 | study == 8  )
+  uhr1000.middle <- subset(uhr1000.single, study == 5 | study == 6 | study == 11 | study == 13 | study == 12 | study == 8  )
+  uhr1000.late <- subset(uhr1000.single, study == 7 | study == 10 | study == 9 )
+  
+  # Develop models with different baseline years
+  dd <- datadist(uhr1000.early)
+  options(datadist='dd')
+  cox.early <- cph(Surv(transdays, transtat) ~ caarms_DS_sev_0 + caarms_UTC_sev_0 + sans_tot_0 , data = uhr1000.early, x=TRUE, y=TRUE, surv = TRUE, time.inc = 2*365)
+  
+  dd <- datadist(uhr1000.middle)
+  options(datadist='dd')
+  cox.middle <- cph(Surv(transdays, transtat) ~ caarms_DS_sev_0 + caarms_UTC_sev_0 + sans_tot_0 , data = uhr1000.middle, x=TRUE, y=TRUE, surv = TRUE, time.inc = 2*365)
+  
+  dd <- datadist(uhr1000.middle)
+  options(datadist='dd')
+  cox.all <- cph(Surv(transdays, transtat) ~ caarms_DS_sev_0 + caarms_UTC_sev_0 + sans_tot_0 , data = uhr1000.all, x=TRUE, y=TRUE, surv = TRUE, time.inc = 2*365)
+  
+  # Create Cox model with same predictors in validation set
+  dd <- datadist(uhr1000.late)
+  options(datadist='dd')
+  cox.late <- cph(Surv(transdays, transtat) ~ caarms_DS_sev_0 + caarms_UTC_sev_0 + sans_tot_0 , data = uhr1000.late, x=TRUE, y=TRUE, surv = TRUE, time.inc = 2*365)
+  
+  #### Calculate calibration curve and c-index in validation set ####
+  
+  val.early[imp.nr] <- val.calibration.slope(cox.early, cox.late, uhr1000.late)
+  val.middle[imp.nr] <- val.calibration.slope(cox.middle, cox.late, uhr1000.late)
+  val.all[imp.nr] <- val.calibration.slope(cox.all, cox.late, uhr1000.late)
 
-em.outcomes
-plot(em.outcomes)
+  # Calculate c-index for both models in validation set
+  surv.obj <- with(uhr1000.late,Surv(transdays,transtat)) 
+  
+  estimates <- survest(cox.early,newdata=uhr1000.late,times=2*365)$surv
+  c.early[imp.nr] <- rcorr.cens(x=estimates,S=surv.obj)
+  
+  estimates <- survest(cox.middle,newdata=uhr1000.late,times=2*365)$surv
+  c.middle[imp.nr] <- rcorr.cens(x=estimates,S=surv.obj)
+  
+  estimates <- survest(cox.all,newdata=uhr1000.late,times=2*365)$surv
+  c.all[imp.nr] <- rcorr.cens(x=estimates,S=surv.obj)
+  
+  # Calculate calibration curve
+  tmp <- validation.plot(cox.early, 2, imp.nr, uhr1000.late)
+  plot.early <- rbind(plot.early, tmp)
+  
+  tmp <- validation.plot(cox.middle, 2, imp.nr, uhr1000.late)
+  plot.middle <- rbind(plot.middle, tmp)
+  
+  tmp <- validation.plot(cox.all, 2, imp.nr, uhr1000.late)
+  plot.all <- rbind(plot.all, tmp)
+  
+}
 
-x.em <- model.matrix(cox.em) %*% coef(cox.em)
-xavg.em <- sum(coef(cox.em)*cox.em$means) 
-PI.em <- x.em - xavg.em # centered PI in development dataset (for discrimination later)
+plot.early$Type <- as.factor(plot.early$Type)
+plot.middle$Type <- as.factor(plot.middle$Type)
+plot.all$Type <- as.factor(plot.all$Type)
 
-x.val.em <- model.matrix(cox.late) %*% coef(cox.em) # determine Xb in validation data 
-# by using coefficients of development data 
-PI.em.val <- x.val.em - xavg.em # center PI by using mean of PI of development data 
-
-uhr1000.late$PI.em.val <- PI.em.val
-fit.val.em <- cph(Surv(transmonths, transtat) ~ PI.em.val,data = uhr1000.late, x=TRUE, y=TRUE, surv = TRUE, time.inc = 2*12)
-fit.val.em$coefficients
-
-surv.obj <- with(uhr1000.late,Surv(transmonths,transtat)) 
-estimates <- survest(cox.em,newdata=uhr1000.late,times=2*12)$surv
-rcorr.cens(x=estimates,S=surv.obj)
-
-val.uhr3 <- validate(cox.em, method="boot", B=1000, bw=FALSE)
-val.uhr3
-
-em.data <- data.frame(1 - em.outcomes$actual, 1-em.outcomes$p)
-colnames(em.data) <- c('x','Value')
-em.data$Type <- "Temporal"
-
-cal <- calibrate(cox.em, method = "boot", u= 2*12, m=10, B=1000, bw=FALSE)
-x <- as.data.frame(1 - cal[,'pred'])
-colnames(x) <- c('x')
-
-cal.base.correct <- as.data.frame(1 - cal[,'calibrated.corrected'])
-colnames(cal.base.correct) <- c('Value')
-cal.base.correct$Type <- 'Internal'
-
-# cal.base.observed <- as.data.frame(1 - cal[,'calibrated'])
-# colnames(cal.base.observed) <- c('Value')
-# cal.base.observed$Type <- 'Observed'
-
-cal_plot_data <- rbind(cbind(x, cal.base.correct), em.data )
-
-cal.plot <- ggplot(cal_plot_data, aes(x = x, y = Value, color = Type, linetype = Type)) +
-  geom_line(linewidth = 2) +
+ggplot(plot.early, aes(x = x, y = Value, group = Type)) +
+  geom_smooth(method="loess", se=FALSE, fullrange=FALSE, linewidth = 1, color = "#8c8c8c") +
   scale_x_continuous(name =paste("Predicted 2-year Probability of Transition to Psychosis",sep = ""), breaks = c(0.1,0.2,0.3,0.4,0.5), limits=c(0, 0.5)) +
   scale_y_continuous(name=paste("Observed 2-year Probability of Transition to Psychosis",sep = ""), breaks = c(0.1,0.2,0.3,0.4,0.5), limits=c(0, 0.5)) +
-  scale_color_manual(values = c("Internal" = "#225ea8", "Temporal" = "#a1dab4"),
-                     labels = c("Internal validation", "2016 - 2021 (temporal validation)"), name = "") +
-  scale_linetype_manual(values = c("Internal" = "solid", "Temporal" = "dotted"),
-                        labels = c("Internal validation", "2016 - 2021 (temporal validation)"), name = "") +
-  geom_abline(aes(intercept = 0, slope = 1, color='black'), guide = "none")	+
+  geom_abline(aes(intercept = 0, slope = 1), color="black")	+
   theme_bw() +
   theme(plot.title = element_text(size = 18, hjust = 0.5),
         axis.title.x = element_text(size = 14),
@@ -642,143 +687,32 @@ cal.plot <- ggplot(cal_plot_data, aes(x = x, y = Value, color = Type, linetype =
         axis.text.y = element_text(size = 13)) +
   theme(legend.position="bottom") 
 
-cal.plot
-
-
-################################################################################
-#################### Different baseline years     ##############################
-################################################################################
-# Single imputation 
-#imp.nr <- sample(1:50,1, replace=F) 
-imp.nr = 19
-uhr1000.single <- subset(data.comp, .imp == imp.nr )
-
-uhr1000.early <- subset(uhr1000.single, study < 7 | study == 11 | study == 13 | study == 12 | study == 8  )
-uhr1000.middle <- subset(uhr1000.single, study == 5 | study == 6 | study == 11 | study == 13 | study == 12 | study == 8  )
-uhr1000.late <- subset(uhr1000.single, study == 7 | study == 10 | study == 9 )
-
-# Preperation for cox model fit
-dd <- datadist(uhr1000.early)
-options(datadist='dd')
-
-# Calculate original model
-cox.late <- cph(Surv(transmonths, transtat) ~ caarms_DS_sev_0 + caarms_UTC_sev_0 + sans_tot_0 , data = uhr1000.late, x=TRUE, y=TRUE, surv = TRUE, time.inc = 2*12)
-
-cox.early <- cph(Surv(transmonths, transtat) ~ caarms_DS_sev_0 + caarms_UTC_sev_0 + sans_tot_0 , data = uhr1000.early, x=TRUE, y=TRUE, surv = TRUE, time.inc = 2*12)
-
-early.outcomes <- val.surv(cox.early, uhr1000.late, Surv(uhr1000.late$transmonths, uhr1000.late$transtat), u = 2*12)
-
-early.outcomes
-
-plot(early.outcomes)
-
-x.early <- model.matrix(cox.early) %*% coef(cox.early)
-xavg.early <- sum(coef(cox.early)*cox.early$means) 
-PI.early <- x.early - xavg.early # centered PI in development dataset (for discrimination later)
-
-x.val.early <- model.matrix(cox.late) %*% coef(cox.early) # determine Xb in validation data 
-# by using coefficients of development data 
-PI.early.val <- x.val.early - xavg.early # center PI by using mean of PI of development data 
-
-uhr1000.late$PI.early.val <- PI.early.val
-fit.val.early <- cph(Surv(transmonths, transtat) ~ PI.early.val,data = uhr1000.late, x=TRUE, y=TRUE, surv = TRUE, time.inc = 2*12)
-fit.val.early$coefficients
-
-surv.obj <- with(uhr1000.late,Surv(transmonths,transtat)) 
-estimates <- survest(cox.early,newdata=uhr1000.late,times=2*12)$surv
-rcorr.cens(x=estimates,S=surv.obj)
-
-
-# Preperation for cox model fit
-cox.middle <- cph(Surv(transmonths, transtat) ~ caarms_DS_sev_0 + caarms_UTC_sev_0 + sans_tot_0 , data = uhr1000.middle, x=TRUE, y=TRUE, surv = TRUE, time.inc = 2*12)
-
-middle.outcomes <- val.surv(cox.middle, uhr1000.late, Surv(uhr1000.late$transmonths, uhr1000.late$transtat), u = 2*12)
-
-middle.outcomes
-
-plot(middle.outcomes)
-
-x.middle <- model.matrix(cox.middle) %*% coef(cox.middle)
-xavg.middle <- sum(coef(cox.middle)*cox.middle$means) 
-PI.middle <- x.middle - xavg.middle # centered PI in development dataset (for discrimination later)
-
-x.val.middle <- model.matrix(cox.late) %*% coef(cox.middle) # determine Xb in validation data 
-# by using coefficients of development data 
-PI.middle.val <- x.val.middle - xavg.middle # center PI by using mean of PI of development data 
-
-uhr1000.late$PI.middle.val <- PI.middle.val
-fit.val.middle <- cph(Surv(transmonths, transtat) ~ PI.middle.val,data = uhr1000.late, x=TRUE, y=TRUE, surv = TRUE, time.inc = 2*12)
-fit.val.middle$coefficients
-
-surv.obj <- with(uhr1000.late,Surv(transmonths,transtat)) 
-estimates <- survest(cox.middle,newdata=uhr1000.late,times=2*12)$surv
-rcorr.cens(x=estimates,S=surv.obj)
-
-# Preperation for cox model fit
-dd <- datadist(uhr1000.earlyAndmiddle)
-options(datadist='dd')
-
-# Calculate original model
-cox.em <- cph(Surv(transmonths, transtat) ~ caarms_DS_sev_0 + caarms_UTC_sev_0 + sans_tot_0 , data = uhr1000.earlyAndmiddle, x=TRUE, y=TRUE, surv = TRUE, time.inc = 2*12)
-
-em.outcomes <- val.surv(cox.em, uhr1000.late, Surv(uhr1000.late$transmonths, uhr1000.late$transtat), u = 2*12)
-
-em.outcomes
-plot(em.outcomes)
-
-x.em <- model.matrix(cox.em) %*% coef(cox.em)
-xavg.em <- sum(coef(cox.em)*cox.em$means) 
-PI.em <- x.em - xavg.em # centered PI in development dataset (for discrimination later)
-
-x.val.em <- model.matrix(cox.late) %*% coef(cox.em) # determine Xb in validation data 
-# by using coefficients of development data 
-PI.em.val <- x.val.em - xavg.em # center PI by using mean of PI of development data 
-
-uhr1000.late$PI.em.val <- PI.em.val
-fit.val.em <- cph(Surv(transmonths, transtat) ~ PI.em.val,data = uhr1000.late, x=TRUE, y=TRUE, surv = TRUE, time.inc = 2*12)
-fit.val.em$coefficients
-
-surv.obj <- with(uhr1000.late,Surv(transmonths,transtat)) 
-estimates <- survest(cox.em,newdata=uhr1000.late,times=2*12)$surv
-rcorr.cens(x=estimates,S=surv.obj)
-
-### Plot ####
-
-em.data <- data.frame(1 - em.outcomes$actual, 1-em.outcomes$p)
-colnames(em.data) <- c('y','x')
-em.data$group <- 3
-
-m.data <- data.frame(1 - middle.outcomes$actual, 1-middle.outcomes$p)
-colnames(m.data) <- c('y','x')
-m.data$group <- 2
-
-e.data <- data.frame(1 - early.outcomes$actual, 1-early.outcomes$p)
-colnames(e.data) <- c('y','x')
-e.data$group <- 1
-
-val_plot_data <- rbind(em.data, m.data, e.data)
-
-val_plot_data$group <- as.factor(val_plot_data$group)
-
-val.plot <- ggplot(val_plot_data, aes(x=x, y = y, group = group)) +
-  geom_line(aes(linetype = group, colour = group), linewidth  = 1.1, show.legend	= TRUE) +
-  geom_line(aes(linetype = group, colour = group), linewidth  = 1.1, show.legend	= TRUE) +
-  geom_line(aes(linetype = group, colour = group), linewidth  = 1.1, show.legend	= TRUE) +
-  scale_x_continuous(name =paste("Predicted ", "2-year Probability of Transition to Psychosis",sep = ""), breaks = c(0.2,0.4,0.6), limits=c(0, 0.6)) +
-  scale_y_continuous(name=paste("Observed ", "2-year Probability of Transition to Psychosis",sep = ""), breaks = c(0.2,0.4,0.6), limits=c(0, 0.6)) +
-  labs(color = 'Baseline years', linetype = '') +
-  geom_abline(aes(intercept = 0, slope = 1), color='black')	+
-  scale_color_manual(values = c("3" = "#225ea8", "2" = "#41b6c4", "1" = "#a1dab4"),
-                     labels = c("1995 - 2007", "2008 - 2018", "1995 - 2018")) +
-  scale_linetype_manual(values = c("3" = "solid", "2" = "dashed", "1" = "dotted"), guide = "none") +
+ggplot(plot.middle, aes(x = x, y = Value, group = Type)) +
+  geom_smooth(method="loess", se=FALSE, fullrange=FALSE, linewidth = 1, color =  "#8c8c8c") +
+  scale_x_continuous(name =paste("Predicted 2-year Probability of Transition to Psychosis",sep = ""), breaks = c(0.1,0.2,0.3,0.4,0.5), limits=c(0, 0.5)) +
+  scale_y_continuous(name=paste("Observed 2-year Probability of Transition to Psychosis",sep = ""), breaks = c(0.1,0.2,0.3,0.4,0.5), limits=c(0, 0.5)) +
+  geom_abline(aes(intercept = 0, slope = 1), color="black")	+
   theme_bw() +
   theme(plot.title = element_text(size = 18, hjust = 0.5),
-        axis.title.x = element_text(size = 16),
-        axis.title.y = element_text(size = 16),
-        legend.text = element_text(size = 14),
-        legend.title = element_text(size = 16),
-        axis.text.x = element_text(size = 14),
-        axis.text.y = element_text(size = 14)) +
-  theme(legend.position="bottom")
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        legend.text = element_text(size = 13),
+        legend.title = element_text(size = 14),
+        axis.text.x = element_text(size = 13),
+        axis.text.y = element_text(size = 13)) +
+  theme(legend.position="bottom") 
 
-val.plot
+ggplot(plot.all, aes(x = x, y = Value, group = Type)) +
+  geom_smooth(method="loess", se=FALSE, fullrange=FALSE, linewidth = 1, color =  "#8c8c8c") +
+  scale_x_continuous(name =paste("Predicted 2-year Probability of Transition to Psychosis",sep = ""), breaks = c(0.1,0.2,0.3,0.4,0.5), limits=c(0, 0.5)) +
+  scale_y_continuous(name=paste("Observed 2-year Probability of Transition to Psychosis",sep = ""), breaks = c(0.1,0.2,0.3,0.4,0.5), limits=c(0, 0.5)) +
+  geom_abline(aes(intercept = 0, slope = 1), color="black")	+
+  theme_bw() +
+  theme(plot.title = element_text(size = 18, hjust = 0.5),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        legend.text = element_text(size = 13),
+        legend.title = element_text(size = 14),
+        axis.text.x = element_text(size = 13),
+        axis.text.y = element_text(size = 13)) +
+  theme(legend.position="bottom") 
