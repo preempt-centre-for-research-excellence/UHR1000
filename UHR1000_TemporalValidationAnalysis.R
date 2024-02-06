@@ -13,6 +13,7 @@ library(zoo)
 library(ggplot2)
 library(tidymodels)
 library(gtsummary)
+library(dcurves)
 ################################################################################
 #################### Functions  ##############################
 ################################################################################
@@ -132,7 +133,9 @@ validation.plot <- function( cox.model, year, number, uhr1000.late){
 #################### Load UHR 1000 tables  ##############################
 ################################################################################
 
-uhr1000 <- read.csv("path/to/dataset/", header = TRUE, sep=",")
+uhr1000 <- read.csv("U:/PostDoc/Research/UHR1000+/UHR1000_MasterFile_V01.csv", header = TRUE, sep=",")
+
+#uhr1000 <- read.csv("path/to/dataset/", header = TRUE, sep=",")
 
 # Calculate follow-up in months
 uhr1000$transmonths <- (as.yearmon(as.character(uhr1000$enddate), format = "%d/%m/%Y") - as.yearmon(as.character(uhr1000$startdate), format = "%d/%m/%Y"))*12
@@ -569,8 +572,8 @@ summary(pool(models), conf.int = 0.95, exponentiate = TRUE)
 ################################################################################
 
 # Single imputation 
-imp.nr <- sample(1:50,1, replace=F) 
-#imp.nr = 19 # select specific imputation to reproduce results from paper
+#imp.nr <- sample(1:50,1, replace=F) 
+imp.nr = 19 # select specific imputation to reproduce results from paper
 uhr1000.single <- subset(data.comp, .imp == imp.nr )
 
 # Preperation for cox model fit
@@ -597,6 +600,42 @@ cal.uhr3
 insta.uhr3 <- instability.plot(uhr1000.single, as.formula(Surv(transdays, transtat) ~ caarms_DS_sev_0 + caarms_UTC_sev_0 + sans_tot_0), risk.uhr3, 2, 1000)
 mean(insta.uhr3)
 
+# Decision curves
+uhr1000.decision <-
+  uhr1000.single %>%
+  mutate(
+    pr_failure18 =
+      1 - summary(survfit(uhr.3, newdata = uhr1000.single), times = 2*365)$surv[1, ]
+  )
+
+dca(Surv(transdays, transtat) ~ pr_failure18,
+    data = uhr1000.decision,
+    time = 2*365,
+    thresholds = seq(0.05, 0.4, 0.01),
+    label = list(pr_failure18 = "Prediction Model")
+) %>%
+  plot(smooth = TRUE)
+
+dca(Surv(transdays, transtat) ~ pr_failure18,
+    data = uhr1000.decision,
+    time = 2*365,
+    thresholds = seq(0.05, 0.4, 0.01),
+    label = list(pr_failure18 = "Prediction Model")
+) %>%
+  net_intervention_avoided() %>%
+  plot(smooth = TRUE)
+
+tmp <- dca(Surv(transdays, transtat) ~ pr_failure18,
+    data = uhr1000.decision,
+    time = 2*365,
+    thresholds = seq(0.05, 0.4, 0.01),
+    label = list(pr_failure18 = "Prediction Model")
+) %>%
+  net_intervention_avoided()
+
+ggplot(tmp$dca, aes(x = threshold, y = net_intervention_avoided, color = label)) + geom_line()
+
+
 ################################################################################
 #################### Temporal validation   ##############################
 ################################################################################
@@ -613,6 +652,8 @@ plot.early <- data.frame()
 plot.middle <- data.frame()
 plot.all <- data.frame()
 
+interv.avoid.early <- data.frame()
+net.benefit.early <- data.frame()
 for(imp.nr in c(1:50)){
   uhr1000.single <- subset(data.comp, .imp == imp.nr )
   uhr1000.early <- subset(uhr1000.single, study < 7 )
@@ -666,6 +707,64 @@ for(imp.nr in c(1:50)){
   tmp <- validation.plot(cox.all, 2, imp.nr, uhr1000.late)
   plot.all <- rbind(plot.all, tmp)
   
+  # Decision curves
+  uhr1000.late <-
+    uhr1000.late %>%
+    mutate(
+      trans_pred =
+        1 - summary(survfit(cox.early, newdata = uhr1000.late), times = 2*365)$surv[1, ]
+    )
+  
+  tmp <- dca(Surv(transdays, transtat) ~ trans_pred,
+             data = uhr1000.late,
+             time = 2*365,
+             thresholds = seq(0.05, 0.4, 0.05),
+             label = list(trans_pred = "Prediction Model")
+  ) %>%
+    net_intervention_avoided()
+  
+  tmp.interv <-   cbind(tmp$dca$net_intervention_avoided, tmp$dca$threshold, tmp$dca$label)
+  tmp.net.benefit <-  cbind(tmp$dca$net_benefit, tmp$dca$threshold, tmp$dca$label)
+  
+  uhr1000.late <-
+    uhr1000.late %>%
+    mutate(
+      trans_pred =
+        1 - summary(survfit(cox.middle, newdata = uhr1000.late), times = 2*365)$surv[1, ]
+    )
+  
+  tmp <- dca(Surv(transdays, transtat) ~ trans_pred,
+             data = uhr1000.late,
+             time = 2*365,
+             thresholds = seq(0.05, 0.4, 0.01),
+             label = list(trans_pred = "Prediction Model")
+  ) %>%
+    net_intervention_avoided()
+  
+  tmp.interv <-  rbind(tmp.interv, cbind(tmp$dca$net_intervention_avoided[73:108], tmp$dca$threshold[73:108], rep(4,36)))
+  tmp.net.benefit <-  rbind(tmp.net.benefit, cbind(tmp$dca$net_benefit[73:108], tmp$dca$threshold[73:108], rep(4,36)))
+  
+  uhr1000.late <-
+    uhr1000.late %>%
+    mutate(
+      trans_pred =
+        1 - summary(survfit(cox.all, newdata = uhr1000.late), times = 2*365)$surv[1, ]
+    )
+  
+  tmp <- dca(Surv(transdays, transtat) ~ trans_pred,
+             data = uhr1000.late,
+             time = 2*365,
+             thresholds = seq(0.05, 0.4, 0.01),
+             label = list(trans_pred = "Prediction Model")
+  ) %>%
+    net_intervention_avoided()
+  
+  tmp.interv <-  rbind(tmp.interv, cbind(tmp$dca$net_intervention_avoided[73:108], tmp$dca$threshold[73:108],rep(5,36)))
+  tmp.net.benefit <-  rbind(tmp.net.benefit, cbind(tmp$dca$net_benefit[73:108], tmp$dca$threshold[73:108], rep(5,36)))
+  
+  interv.avoid.early <- rbind(interv.avoid.early, tmp.interv)
+  net.benefit.early <- rbind(net.benefit.early, tmp.net.benefit)
+
 }
 
 plot.early$Type <- as.factor(plot.early$Type)
@@ -707,6 +806,47 @@ ggplot(plot.all, aes(x = x, y = Value, group = Type)) +
   scale_x_continuous(name =paste("Predicted 2-year Probability of Transition to Psychosis",sep = ""), breaks = c(0.1,0.2,0.3,0.4,0.5), limits=c(0, 0.5)) +
   scale_y_continuous(name=paste("Observed 2-year Probability of Transition to Psychosis",sep = ""), breaks = c(0.1,0.2,0.3,0.4,0.5), limits=c(0, 0.5)) +
   geom_abline(aes(intercept = 0, slope = 1), color="black")	+
+  theme_bw() +
+  theme(plot.title = element_text(size = 18, hjust = 0.5),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        legend.text = element_text(size = 13),
+        legend.title = element_text(size = 14),
+        axis.text.x = element_text(size = 13),
+        axis.text.y = element_text(size = 13)) +
+  theme(legend.position="bottom") 
+
+
+interv.avoid.early$V3 <- as.factor(interv.avoid.early$V3)
+
+ggplot(interv.avoid.early, aes(x = V2, y = V1, color = V3)) +
+  stat_summary(fun.y = 'mean',  geom = 'line', linewidth = 1.5) +
+  stat_summary(fun.data = 'mean_sdl', alpha = 0.2) +
+  scale_x_continuous(name = "Threshold Probability", breaks = c(0.1,0.2,0.3,0.4), limits=c(0.1, 0.4)) +
+  scale_y_continuous(name="Net reduction in intervention", breaks = c(0.00,0.25,0.50,0.75,1), limits=c(-0.2, 1)) +
+  scale_color_manual(values = c("1" = "#cccccc", "2" = "#636363", "3" = "#253494" , "4" = "#41b6c4", "5" = "#a1dab4"),
+                     labels = c("Treat All", "Treat None", "1195 - 2007", "2000 - 2018", "1995 - 2018")) +
+  labs(colour = "") + 
+  theme_bw() +
+  theme(plot.title = element_text(size = 18, hjust = 0.5),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        legend.text = element_text(size = 13),
+        legend.title = element_text(size = 14),
+        axis.text.x = element_text(size = 13),
+        axis.text.y = element_text(size = 13)) +
+  theme(legend.position="bottom") 
+
+net.benefit.early$V3 <- as.factor(net.benefit.early$V3)
+
+ggplot(net.benefit.early, aes(x = V2, y = V1, color = V3)) +
+  stat_summary(fun.y = 'mean',  geom = 'line', linewidth = 1.5) +
+  stat_summary(fun.data = 'mean_sdl', alpha = 0.2) +
+  scale_x_continuous(name = "Threshold Probability", breaks = c(0.1,0.2,0.3,0.4), limits=c(0.05, 0.4)) +
+  scale_y_continuous(name="Net Benefit", breaks = c(0.00,0.05,0.1, 0.15), limits=c(-0.01, 0.15)) +
+  scale_color_manual(values = c("1" = "#cccccc", "2" = "#636363", "3" = "#253494" , "4" = "#41b6c4", "5" = "#a1dab4"),
+                     labels = c("Treat All", "Treat None", "1195 - 2007", "2000 - 2018", "1995 - 2018")) +
+  labs(colour = "") + 
   theme_bw() +
   theme(plot.title = element_text(size = 18, hjust = 0.5),
         axis.title.x = element_text(size = 14),
