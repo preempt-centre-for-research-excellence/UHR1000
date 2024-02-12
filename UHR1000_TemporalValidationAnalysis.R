@@ -66,7 +66,7 @@ instability.plot <- function(imp.data, cox.formula, risk.orig, year, B ){
   for(x in c(1:B)){
     data.b <- as.data.frame(uhr1000.boot[[x,1]])
     # Run Cox model
-    cox.bl <- cph(cox.formula, data = data.b, x=TRUE, y=TRUE, surv = TRUE, time.inc = year*12)
+    cox.bl <- cph(cox.formula, data = data.b, x=TRUE, y=TRUE, surv = TRUE, time.inc = year*365)
     pred <- survest(cox.bl, imp.data, times = year*12)
     if(x == 1){
       risk <- 1 - pred$surv
@@ -633,7 +633,41 @@ tmp <- dca(Surv(transdays, transtat) ~ pr_failure18,
 ) %>%
   net_intervention_avoided()
 
-ggplot(tmp$dca, aes(x = threshold, y = net_intervention_avoided, color = label)) + geom_line()
+ggplot(tmp$dca, aes(x = threshold, y = net_intervention_avoided, color = label)) +
+  stat_summary(fun.y = 'mean',  geom = 'line', linewidth = 1.5) +
+  stat_summary(fun.data = 'mean_sdl', alpha = 0.2) +
+  scale_x_continuous(name = "Threshold Probability", breaks = c(0.1,0.2,0.3,0.4), limits=c(0.1, 0.4)) +
+  scale_y_continuous(name="Net reduction in intervention", breaks = c(0.00,0.25,0.50,0.75,1), limits=c(-0.2, 1)) +
+  scale_color_manual(values = c("Treat All" = "#1b9e77", "Treat None" = "#d95f02", "Prediction Model" = "#7570b3"),
+                     labels = c("Treat All", "Treat None", "UHR 1000+ model")) +
+  labs(colour = "") + 
+  theme_bw() +
+  theme(plot.title = element_text(size = 18, hjust = 0.5),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        legend.text = element_text(size = 13),
+        legend.title = element_text(size = 14),
+        axis.text.x = element_text(size = 13),
+        axis.text.y = element_text(size = 13)) +
+  theme(legend.position="bottom") 
+
+ggplot(tmp$dca, aes(x = threshold, y = net_benefit, color = label)) +
+  stat_summary(fun.y = 'mean',  geom = 'line', linewidth = 1.5) +
+  stat_summary(fun.data = 'mean_sdl', alpha = 0.2) +
+  scale_x_continuous(name = "Threshold Probability", breaks = c(0.1,0.2,0.3,0.4), limits=c(0.05, 0.4)) +
+  scale_y_continuous(name="Net benefit", breaks = c(0.00,0.05, 0.10, 0.15), limits=c(-0.05, 0.15)) +
+  scale_color_manual(values = c("Treat All" = "#1b9e77", "Treat None" = "#d95f02", "Prediction Model" = "#7570b3"),
+                     labels = c("Treat All", "Treat None", "UHR 1000+ model")) +
+  labs(colour = "") + 
+  theme_bw() +
+  theme(plot.title = element_text(size = 18, hjust = 0.5),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        legend.text = element_text(size = 13),
+        legend.title = element_text(size = 14),
+        axis.text.x = element_text(size = 13),
+        axis.text.y = element_text(size = 13)) +
+  theme(legend.position="bottom") 
 
 
 ################################################################################
@@ -643,6 +677,10 @@ ggplot(tmp$dca, aes(x = threshold, y = net_intervention_avoided, color = label))
 val.early <- vector()
 val.middle <- vector()
 val.all <- vector()
+
+cal.large.early <- vector()
+cal.large.middle <- vector()
+cal.large.all <- vector()
 
 c.early <- vector()
 c.middle <- vector()
@@ -684,7 +722,7 @@ for(imp.nr in c(1:50)){
   val.early[imp.nr] <- val.calibration.slope(cox.early, cox.late, uhr1000.late)
   val.middle[imp.nr] <- val.calibration.slope(cox.middle, cox.late, uhr1000.late)
   val.all[imp.nr] <- val.calibration.slope(cox.all, cox.late, uhr1000.late)
-
+  
   # Calculate c-index for both models in validation set
   surv.obj <- with(uhr1000.late,Surv(transdays,transtat)) 
   
@@ -697,16 +735,18 @@ for(imp.nr in c(1:50)){
   estimates <- survest(cox.all,newdata=uhr1000.late,times=2*365)$surv
   c.all[imp.nr] <- rcorr.cens(x=estimates,S=surv.obj)
   
-  # Calculate calibration curve
+  # Calculate calibration curve and calibration-in-the-large
   tmp <- validation.plot(cox.early, 2, imp.nr, uhr1000.late)
+  cal.large.early[imp.nr] <- mean(tmp$x) - mean(tmp$Value)
   plot.early <- rbind(plot.early, tmp)
   
   tmp <- validation.plot(cox.middle, 2, imp.nr, uhr1000.late)
+  cal.large.middle[imp.nr] <- mean(tmp$x) - mean(tmp$Value)
   plot.middle <- rbind(plot.middle, tmp)
   
   tmp <- validation.plot(cox.all, 2, imp.nr, uhr1000.late)
-  plot.all <- rbind(plot.all, tmp)
-  
+  cal.large.all[imp.nr] <- mean(tmp$x) - mean(tmp$Value)
+  plot.all <- rbind(plot.all, tmp)  
   # Decision curves
   uhr1000.late <-
     uhr1000.late %>%
@@ -766,6 +806,45 @@ for(imp.nr in c(1:50)){
   net.benefit.early <- rbind(net.benefit.early, tmp.net.benefit)
 
 }
+
+cal.large <- as.data.frame(cbind(cal.large.early, cal.large.middle, cal.large.all))
+names(cal.large) <- c('early','middle','all')
+cal.large$Type <- 'Calibration-in-the-large'
+
+cal.slope <- as.data.frame(cbind(val.early, val.middle, val.all))
+names(cal.slope) <- c('early','middle','all')
+cal.slope$Type <- 'Slope'
+
+c.index <- as.data.frame(cbind(c.early, c.middle, c.all))
+names(c.index) <- c('early','middle','all')
+c.index$Type <- 'Harrell C index'
+
+val.results <- rbind(c.index, cal.slope, cal.large)
+
+
+table_validation <- val.results %>% 
+  select(early, middle, all, Type) %>% # keep only columns of interest
+  tbl_summary(
+    by = "Type",
+    statistic = all_continuous() ~ "{mean}",        # stats and format for continuous columns
+    digits = all_continuous() ~ 3,  
+    label  = list(                                              # display labels for column names
+      early ~ "1995 - 2007",
+      middle   ~ "2000 - 2018",                           
+      all  ~ "1995 - 2018"  
+    ),
+    missing = "no", # don't list missing data separately;
+  ) %>%
+  add_ci(pattern = "{stat} ({ci})",
+         style_fun = everything() ~ purrr::partial(style_number, digits = 3))%>% # add column with total number of non-missing observations
+  modify_header(label = "Variable") %>% # update the column header
+  bold_labels()
+
+table_validation %>%
+  as_flex_table() %>%
+  flextable::save_as_docx(path = ".../UHR1000/validation_table.docx")
+
+
 
 plot.early$Type <- as.factor(plot.early$Type)
 plot.middle$Type <- as.factor(plot.middle$Type)
